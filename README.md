@@ -8,7 +8,7 @@ Every team building RAG ships it without a repeatable eval loop. Frameworks like
 
 ## Status
 
-**M2 shipped.** Document ingestion and local ChromaDB vector store are fully implemented.
+**M3 shipped.** Synthetic Q&A dataset generation is fully implemented.
 
 What works today:
 
@@ -17,12 +17,14 @@ What works today:
 - CLI entry point `rag-eval` registered via `pyproject.toml` scripts
 - `rag-eval --version` prints `rag-eval-kit 0.1.0`
 - `rag-eval ingest <docs_dir>` reads `.pdf`, `.txt`, and `.md` files recursively, splits them into overlapping chunks, embeds with OpenAI `text-embedding-3-small`, and persists to a local ChromaDB collection — with a `rich` progress bar
+- `rag-eval generate <docs_dir>` synthesizes a Q&A dataset from document chunks using an LLM, and saves it to `dataset.json`
 - `rag-eval run <docs_dir>` accepts a path argument and prints a stub message (pipeline not yet implemented)
 - `DocumentLoader` class handles file reading (pypdf for PDFs, plain text for .txt/.md) and sliding-window chunking with configurable size and overlap
 - `VectorStore` class wraps ChromaDB with upsert-based idempotency; embeds in batches of 100
-- MIT license, `.gitignore`, unit tests for chunking logic in `tests/test_ingestion.py`
+- `DatasetGenerator` class samples chunks, calls an LLM (OpenAI or Anthropic) to produce Q&A pairs, and persists to `dataset.json`
+- MIT license, `.gitignore`, unit tests in `tests/test_ingestion.py` and `tests/test_dataset.py`
 
-M3 onward (dataset generation, scoring) is not yet implemented.
+M4 onward (RAG pipeline runner, scoring) is not yet implemented.
 
 ## Quickstart
 
@@ -50,6 +52,19 @@ rag-eval ingest ./docs
 rag-eval ingest ./docs --chunk-size 256 --chunk-overlap 32 --collection my_eval --db-path .chroma
 ```
 
+### Generate a synthetic Q&A dataset (M3)
+
+```bash
+# Generate 20 factual Q&A pairs from ./docs (default)
+rag-eval generate ./docs
+
+# Options
+rag-eval generate ./docs --n 50 --difficulty multi-hop --llm anthropic --output my_dataset.json
+```
+
+Each generated item contains: `question`, `answer`, `source_chunk`, `source` (file path), and `difficulty`.
+The dataset is saved as JSON and can be loaded with `DatasetGenerator.load("dataset.json")`.
+
 ### Install from PyPI (once published)
 
 ```bash
@@ -64,7 +79,7 @@ rag-eval run ./docs
 
 ## Architecture
 
-### Components (as of M2)
+### Components (as of M3)
 
 ```
 docs/
@@ -74,17 +89,26 @@ docs/
  DocumentLoader          src/rag_eval_kit/ingestion.py
    • reads files (pypdf for PDF, plain text for .txt/.md)
    • sliding-window chunking (configurable size + overlap)
-       │  List[str] chunks
-       ▼
+       │  List[Chunk]
+       ├──────────────────────────────────────┐
+       ▼                                      ▼
   VectorStore            src/rag_eval_kit/ingestion.py
    • embeds via OpenAI text-embedding-3-small (batches of 100)
    • upserts into a local ChromaDB collection (idempotent)
        │
        ▼
   .chroma/               persistent local vector store
+
+ DatasetGenerator        src/rag_eval_kit/dataset.py
+   • samples random chunks
+   • calls LLM (OpenAI GPT-4o-mini or Anthropic Claude) to produce Q&A pairs
+   • supports factual (1 chunk) and multi-hop (2 chunks) difficulty
+       │
+       ▼
+  dataset.json           machine-readable Q&A ground-truth dataset
 ```
 
-The `rag-eval ingest` CLI command wires these two classes together with a `rich` progress bar.
+The `rag-eval ingest` and `rag-eval generate` CLI commands wire these classes together with `rich` progress bars.
 
 ### Milestone map
 
@@ -92,7 +116,7 @@ The `rag-eval ingest` CLI command wires these two classes together with a `rich`
 |-----------|-------|-------|
 | M1 | Scaffold, README, CLI stub (`rag-eval --version`) | shipped |
 | M2 | Document ingestion + ChromaDB vector store | shipped |
-| M3 | Synthetic Q&A dataset generation via LLM | planned |
+| M3 | Synthetic Q&A dataset generation via LLM | shipped |
 | M4 | RAG pipeline runner (chunking, retrieval, answer generation) | planned |
 | M5 | LLM-as-judge scoring (faithfulness, relevance, recall) | planned |
 | M6 | Rich terminal report + `results.json` output | planned |
