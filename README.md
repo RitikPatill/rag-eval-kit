@@ -8,7 +8,7 @@ Every team building RAG ships it without a repeatable eval loop. Frameworks like
 
 ## Status
 
-**M3 shipped.** Synthetic Q&A dataset generation is fully implemented.
+**M4 shipped.** RAG pipeline and LLM-judge scoring are fully implemented.
 
 What works today:
 
@@ -18,13 +18,15 @@ What works today:
 - `rag-eval --version` prints `rag-eval-kit 0.1.0`
 - `rag-eval ingest <docs_dir>` reads `.pdf`, `.txt`, and `.md` files recursively, splits them into overlapping chunks, embeds with OpenAI `text-embedding-3-small`, and persists to a local ChromaDB collection — with a `rich` progress bar
 - `rag-eval generate <docs_dir>` synthesizes a Q&A dataset from document chunks using an LLM, and saves it to `dataset.json`
-- `rag-eval run <docs_dir>` accepts a path argument and prints a stub message (pipeline not yet implemented)
+- `rag-eval run <docs_dir>` accepts a path argument and prints a stub message (CLI wiring is M5)
 - `DocumentLoader` class handles file reading (pypdf for PDFs, plain text for .txt/.md) and sliding-window chunking with configurable size and overlap
-- `VectorStore` class wraps ChromaDB with upsert-based idempotency; embeds in batches of 100
+- `VectorStore` class wraps ChromaDB with upsert-based idempotency; embeds in batches of 100; exposes `.query(text, top_k)` for retrieval
 - `DatasetGenerator` class samples chunks, calls an LLM (OpenAI or Anthropic) to produce Q&A pairs, and persists to `dataset.json`
-- MIT license, `.gitignore`, unit tests in `tests/test_ingestion.py` and `tests/test_dataset.py`
+- `RAGPipeline` class retrieves top-k chunks per question and generates answers via LLM (OpenAI or Anthropic)
+- `LLMJudge` class scores each `(question, context, generated_answer, gold_answer)` on faithfulness, answer relevance, and context recall using an LLM-as-judge pattern; saves results to `results.json`
+- MIT license, `.gitignore`, unit tests in `tests/`
 
-M4 onward (RAG pipeline runner, scoring) is not yet implemented.
+M5 (CLI wiring for `rag-eval run`) is not yet implemented.
 
 ## Quickstart
 
@@ -65,6 +67,35 @@ rag-eval generate ./docs --n 50 --difficulty multi-hop --llm anthropic --output 
 Each generated item contains: `question`, `answer`, `source_chunk`, `source` (file path), and `difficulty`.
 The dataset is saved as JSON and can be loaded with `DatasetGenerator.load("dataset.json")`.
 
+### Run the RAG pipeline and score results (M4)
+
+CLI wiring for `rag-eval run` lands in M5. Until then, use the Python API directly:
+
+```python
+from rag_eval_kit.dataset import DatasetGenerator
+from rag_eval_kit.ingestion import VectorStore
+from rag_eval_kit.pipeline import RAGPipeline
+from rag_eval_kit.judge import LLMJudge
+
+# Load the ground-truth dataset produced by `rag-eval generate`
+items = DatasetGenerator.load("dataset.json")
+
+# Connect to the vector store populated by `rag-eval ingest`
+store = VectorStore()
+
+# Retrieve + generate answers
+pipeline = RAGPipeline(store, llm="openai", top_k=4)
+results = pipeline.run(items)
+
+# Score on faithfulness, answer relevance, and context recall
+judge = LLMJudge(llm="openai")
+scores = judge.score_all(results)
+LLMJudge.save(scores, "results.json")
+```
+
+Each entry in `results.json` contains: `question`, `generated_answer`, `gold_answer`,
+`faithfulness`, `answer_relevance`, and `context_recall` — all normalised to `0.0–1.0`.
+
 ### Install from PyPI (once published)
 
 ```bash
@@ -79,7 +110,7 @@ rag-eval run ./docs
 
 ## Architecture
 
-### Components (as of M3)
+### Components (as of M4)
 
 ```
 docs/
@@ -106,9 +137,22 @@ docs/
        │
        ▼
   dataset.json           machine-readable Q&A ground-truth dataset
+       │  List[QAItem]
+       ▼
+  RAGPipeline            src/rag_eval_kit/pipeline.py
+   • retrieves top-k chunks from VectorStore per question
+   • generates an answer via LLM (OpenAI or Anthropic)
+       │  List[RAGResult]
+       ▼
+  LLMJudge               src/rag_eval_kit/judge.py
+   • scores each result on faithfulness, answer relevance, context recall
+   • uses LLM-as-judge with structured JSON output (scores clamped 0–5 → 0.0–1.0)
+       │
+       ▼
+  results.json           per-question scores (faithfulness, answer_relevance, context_recall)
 ```
 
-The `rag-eval ingest` and `rag-eval generate` CLI commands wire these classes together with `rich` progress bars.
+The `rag-eval ingest` and `rag-eval generate` CLI commands wire these classes together with `rich` progress bars. Full `rag-eval run` pipeline CLI wiring is M5.
 
 ### Milestone map
 
@@ -117,8 +161,8 @@ The `rag-eval ingest` and `rag-eval generate` CLI commands wire these classes to
 | M1 | Scaffold, README, CLI stub (`rag-eval --version`) | shipped |
 | M2 | Document ingestion + ChromaDB vector store | shipped |
 | M3 | Synthetic Q&A dataset generation via LLM | shipped |
-| M4 | RAG pipeline runner (chunking, retrieval, answer generation) | planned |
-| M5 | LLM-as-judge scoring (faithfulness, relevance, recall) | planned |
+| M4 | RAG pipeline runner + LLM-judge scoring | shipped |
+| M5 | CLI wiring for `rag-eval run` + rich terminal report | planned |
 | M6 | Rich terminal report + `results.json` output | planned |
 
 ## Development

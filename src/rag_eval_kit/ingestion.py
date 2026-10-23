@@ -105,3 +105,12 @@ class VectorStore:
 
     def collection_size(self) -> int:
         return self._collection.count()
+
+    def query(self, text: str, top_k: int = 4) -> list[str]:
+        import openai
+
+        client = openai.OpenAI()
+        response = client.embeddings.create(model=self.embedding_model, input=[text])
+        embedding = response.data[0].embedding
+        results = self._collection.query(query_embeddings=[embedding], n_results=top_k)
+        return results["documents"][0]
